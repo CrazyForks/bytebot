@@ -6,12 +6,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ThemeToggle } from "@/components/theme-toggle";
 import Link from "next/link";
+import Image from "next/image";
 
 interface Message {
   id: string;
   content: string;
   role: "user" | "assistant";
   createdAt?: string;
+  images?: {
+    data: string;
+    mediaType: string;
+  }[];
 }
 
 export default function Home() {
@@ -219,6 +224,35 @@ export default function Home() {
     }
   };
 
+  // Render message content with images
+  const renderMessageContent = (message: Message) => {
+    return (
+      <>
+        <div className="text-sm mb-2">{message.content}</div>
+        {message.images && message.images.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-2">
+            {message.images.map((image, index) => (
+              <div 
+                key={`${message.id}-image-${index}`} 
+                className="relative border rounded overflow-hidden"
+                style={{ maxWidth: '100%', maxHeight: '300px' }}
+              >
+                <Image
+                  src={`data:${image.mediaType};base64,${image.data}`}
+                  alt={`Image ${index + 1}`}
+                  className="object-contain"
+                  width={300}
+                  height={200}
+                  style={{ maxWidth: '100%', maxHeight: '300px' }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
     <div className="flex flex-col h-screen">
       {/* Header */}
@@ -275,7 +309,7 @@ export default function Home() {
           <div className="w-3/5 border-r relative">
             <div className="h-full bg-muted/30">
               <iframe
-                src="http://localhost:6081/vnc.html?autoconnect=true"
+                src="http://localhost:6081/vnc.html?host=localhost&port=6080&resize=scale"
                 style={{
                   width: "100%",
                   height: "100vh",
@@ -298,7 +332,9 @@ export default function Home() {
                           B
                         </span>
                       </div>
-                      <div className="text-sm">{message.content}</div>
+                      <div className="flex-1">
+                        {renderMessageContent(message)}
+                      </div>
                     </div>
                   )}
                   {message.role === "user" && (
@@ -306,7 +342,9 @@ export default function Home() {
                       <div className="flex-shrink-0 w-6 h-6 rounded-full bg-muted flex items-center justify-center">
                         <User className="h-3 w-3" />
                       </div>
-                      <div className="text-sm">{message.content}</div>
+                      <div className="flex-1">
+                        {renderMessageContent(message)}
+                      </div>
                     </div>
                   )}
                 </div>

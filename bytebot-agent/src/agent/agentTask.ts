@@ -349,8 +349,8 @@ const handleComputerToolUse = async (
           break;
       }
 
-      const userResponseMessage: Anthropic.Beta.BetaMessageParam = {
-        role: "user",
+      const assistantResponseMessage: Anthropic.Beta.BetaMessageParam = {
+        role: "assistant",
         content: [
           {
             type: "tool_result",
@@ -365,12 +365,12 @@ const handleComputerToolUse = async (
         ],
       };
 
-      messageStore.push(userResponseMessage);
-      await saveMessageToDatabase(userResponseMessage);
+      messageStore.push(assistantResponseMessage);
+      await saveMessageToDatabase(assistantResponseMessage);
     }
   } catch (error) {
     const errorMessage: Anthropic.Beta.BetaMessageParam = {
-      role: "user",
+      role: "assistant",
       content: [
         {
           type: "tool_result",
@@ -392,6 +392,9 @@ const handleComputerToolUse = async (
 
 export async function runAgent() {
   console.log("Running agent");
+  let completionCount = 0;
+  const maxConsecutiveCompletions = 2; // Number of consecutive text-only responses before considering task complete
+  
   while (isOnAutopilot) {
     let currentMessages = await getMessages();
 
@@ -454,8 +457,20 @@ export async function runAgent() {
       }
     }
 
+    // Check if the agent is done with the task
     if (!containsToolUse) {
-      break;
+      // If the response is just text (no tool use), increment the completion counter
+      completionCount++;
+      
+      // If we've had enough consecutive text-only responses, consider the task complete
+      if (completionCount >= maxConsecutiveCompletions) {
+        console.log("Agent task completed - turning off autopilot");
+        setAutopilot(false);
+        break;
+      }
+    } else {
+      // Reset the completion counter if the agent is still using tools
+      completionCount = 0;
     }
   }
 }

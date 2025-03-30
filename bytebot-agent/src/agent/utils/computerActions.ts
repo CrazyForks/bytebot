@@ -444,6 +444,7 @@ export async function screenshot(): Promise<string> {
     });
 
     if (!response.ok) {
+      console.log('Error:', await response.json());
       throw new Error(`Failed to take screenshot: ${response.statusText}`);
     }
 

@@ -40,6 +40,29 @@ interface ToolResultBlock {
 
 type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock | ImageBlock;
 
+// Interface for the transformed message that will be sent to the client
+interface TransformedMessage {
+  id: string;
+  content: string;
+  role: 'user' | 'assistant';
+  createdAt: Date;
+  images?: {
+    data: string;
+    mediaType: string;
+  }[];
+}
+
+// Database message type
+interface DbMessage {
+  id: string;
+  content: unknown;
+  type: MessageType;
+  createdAt: Date;
+  updatedAt: Date;
+  taskId: string;
+  summaryId: string | null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
@@ -80,45 +103,117 @@ export async function GET(request: NextRequest) {
     const messages = await prisma.message.findMany(query);
     console.log(`Found ${messages.length} new messages for task ${taskId}`);
 
+    // Group messages by type to combine tool use/result with text messages
+    const messagesByType = new Map<string, DbMessage[]>();
+    
+    // First pass: group messages by their timestamp (rounded to the nearest second)
+    messages.forEach(message => {
+      const timestamp = new Date(message.createdAt).getTime();
+      const roundedTimestamp = Math.floor(timestamp / 1000) * 1000; // Round to nearest second
+      const key = `${message.type}_${roundedTimestamp}`;
+      
+      if (!messagesByType.has(key)) {
+        messagesByType.set(key, []);
+      }
+      messagesByType.get(key)?.push(message);
+    });
+
     // Transform the messages to a format suitable for the frontend
-    const transformedMessages = messages.map(message => {
-      // Handle different content types based on the Anthropic message structure
+    const transformedMessages: TransformedMessage[] = [];
+    
+    // Process each group of messages
+    for (const groupedMessages of messagesByType.values()) {
+      // Sort messages by createdAt to ensure correct order
+      groupedMessages.sort((a, b) => 
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      
+      // Combine all content from the grouped messages
       let displayContent = '';
+      const images: { data: string; mediaType: string }[] = [];
+      let hasTextContent = false;
       
-      const content = message.content as unknown as ContentBlock[];
-      
-      if (Array.isArray(content)) {
-        // Process content blocks
-        for (const block of content) {
-          if (block && typeof block === 'object') {
-            if (block.type === 'text' && 'text' in block) {
-              displayContent += block.text;
-            } else if (block.type === 'tool_use' && 'name' in block) {
-              displayContent += `[Using tool: ${block.name}]`;
-            } else if (block.type === 'tool_result' && 'content' in block && Array.isArray(block.content)) {
-              for (const resultBlock of block.content) {
-                if (resultBlock && typeof resultBlock === 'object') {
-                  if (resultBlock.type === 'text' && 'text' in resultBlock) {
-                    displayContent += resultBlock.text;
-                  } else if (resultBlock.type === 'image') {
-                    displayContent += '[Image]';
+      for (const message of groupedMessages) {
+        const content = message.content as unknown as ContentBlock[];
+        
+        if (Array.isArray(content)) {
+          // Process content blocks
+          for (const block of content) {
+            if (block && typeof block === 'object') {
+              // Process text blocks
+              if (block.type === 'text' && 'text' in block) {
+                displayContent += block.text;
+                hasTextContent = true;
+              } 
+              // Process image blocks
+              else if (block.type === 'image' && 'source' in block && block.source) {
+                if (block.source.type === 'base64' && block.source.data) {
+                  images.push({
+                    data: block.source.data,
+                    mediaType: block.source.media_type || 'image/png'
+                  });
+                }
+              }
+              // Extract images from tool_result blocks
+              else if (block.type === 'tool_result' && 'content' in block && Array.isArray(block.content)) {
+                for (const resultBlock of block.content) {
+                  if (resultBlock && typeof resultBlock === 'object') {
+                    // Extract text from tool results for error messages
+                    if (resultBlock.type === 'text' && 'text' in resultBlock) {
+                      const text = resultBlock.text || '';
+                      // Only include error messages from tool results
+                      if (text.includes('ERROR')) {
+                        displayContent += `\n${text}\n`;
+                        hasTextContent = true;
+                      }
+                    }
+                    // Extract images from tool results
+                    else if (resultBlock.type === 'image' && 'source' in resultBlock && resultBlock.source) {
+                      if (resultBlock.source.type === 'base64' && resultBlock.source.data) {
+                        images.push({
+                          data: resultBlock.source.data,
+                          mediaType: resultBlock.source.media_type || 'image/png'
+                        });
+                      }
+                    }
                   }
                 }
               }
             }
           }
+        } else if (typeof content === 'string') {
+          displayContent += content;
+          hasTextContent = true;
         }
-      } else if (typeof content === 'string') {
-        displayContent = content;
       }
-
-      return {
-        id: message.id,
-        content: displayContent,
-        role: message.type === MessageType.USER ? 'user' : 'assistant',
-        createdAt: message.createdAt,
-      };
-    });
+      
+      // Only create a message if there's actual content to display
+      if (hasTextContent || images.length > 0) {
+        // Use the first message in the group for ID and metadata
+        const firstMessage = groupedMessages[0];
+        
+        const transformedMessage: TransformedMessage = {
+          id: firstMessage.id,
+          content: displayContent.trim(),
+          role: firstMessage.type === MessageType.USER ? 'user' : 'assistant',
+          createdAt: firstMessage.createdAt,
+        };
+        
+        // Only add images property if there are images
+        if (images.length > 0) {
+          transformedMessage.images = images;
+        }
+        
+        transformedMessages.push(transformedMessage);
+      }
+    }
+    
+    // Sort the final messages by createdAt
+    transformedMessages.sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+    
+    console.log(`Transformed ${messages.length} DB messages into ${transformedMessages.length} chat messages`);
 
     return NextResponse.json({ messages: transformedMessages });
   } catch (error) {
